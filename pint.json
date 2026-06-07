@@ -1,0 +1,19 @@
+{
+    "preset": "laravel",
+    "exclude": [
+        "vendor"
+    ],
+    "rules": {
+        "concat_space": {
+            "spacing": "one"
+        },
+        "no_unused_imports": true,
+        "ordered_imports": {
+            "sort_algorithm": "alpha"
+        },
+        "single_trait_insert_per_statement": true,
+        "trailing_comma_in_multiline": {
+            "elements": ["arrays", "arguments", "parameters"]
+        }
+    }
+}

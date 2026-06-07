@@ -1,0 +1,72 @@
+{
+    "name": "webrek/laravel-idempotency",
+    "description": "Safe request retries for Laravel APIs via the Idempotency-Key header.",
+    "keywords": [
+        "laravel",
+        "laravel-package",
+        "idempotency",
+        "idempotent",
+        "api",
+        "middleware",
+        "retry",
+        "exactly-once",
+        "webhooks",
+        "http"
+    ],
+    "homepage": "https://github.com/webrek/laravel-idempotency",
+    "license": "MIT",
+    "type": "library",
+    "authors": [
+        {
+            "name": "Victor Hernandez",
+            "email": "victor@arturohernandez.com.mx"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/webrek/laravel-idempotency/issues",
+        "source": "https://github.com/webrek/laravel-idempotency",
+        "security": "https://github.com/webrek/laravel-idempotency/security/advisories/new"
+    },
+    "require": {
+        "php": "^8.1",
+        "illuminate/contracts": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/http": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/support": "^10.0 || ^11.0 || ^12.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^2.0 || ^3.0",
+        "laravel/pint": "^1.18",
+        "mockery/mockery": "^1.6",
+        "orchestra/testbench": "^8.0 || ^9.0 || ^10.0",
+        "phpstan/phpstan": "^1.11 || ^2.0",
+        "phpunit/phpunit": "^10.5 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Webrek\\Idempotency\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Webrek\\Idempotency\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Webrek\\Idempotency\\IdempotencyServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --memory-limit=512M",
+        "pint": "pint",
+        "pint:check": "pint --test"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
