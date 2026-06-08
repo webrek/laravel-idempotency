@@ -90,8 +90,8 @@ exposes. There are no migrations and no new tables.
 
 | Component | Version |
 | --------- | ------- |
-| PHP | 8.1+ |
-| Laravel | 10.x / 11.x / 12.x |
+| PHP | 8.2+ |
+| Laravel | 12.x |
 | Cache store | Any store that supports atomic locks (redis, memcached, dynamodb, database, file, array) |
 
 ## Configuration
