@@ -141,6 +141,29 @@ return [
 ];
 ```
 
+### Per-route retention
+
+Override the configured TTL (in seconds) for specific routes by passing it as a
+middleware parameter:
+
+```php
+Route::post('/payments', ...)->middleware('idempotency:3600');   // 1 hour
+Route::post('/imports', ...)->middleware('idempotency:86400');   // 1 day
+```
+
+### Replay event
+
+An `Idempotency\Events\IdempotentReplay` event is dispatched every time a stored
+response is replayed, so you can measure how many retries you are absorbing:
+
+```php
+use Webrek\Idempotency\Events\IdempotentReplay;
+
+Event::listen(IdempotentReplay::class, function (IdempotentReplay $event) {
+    Metrics::increment('idempotency.replays', tags: ['key' => $event->key]);
+});
+```
+
 ### Requiring a key on specific routes
 
 Leave `require_key` off globally and opt individual routes in by flipping the

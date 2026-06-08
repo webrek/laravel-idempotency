@@ -9,6 +9,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Webrek\Idempotency\Contracts\IdempotencyRepository;
+use Webrek\Idempotency\Events\IdempotentReplay;
 use Webrek\Idempotency\Exceptions\ConcurrentRequestException;
 use Webrek\Idempotency\Exceptions\IdempotencyConflictException;
 use Webrek\Idempotency\Exceptions\InvalidIdempotencyKeyException;
@@ -27,7 +28,7 @@ class EnsureIdempotency
         protected Config $config,
     ) {}
 
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, ?string $ttl = null): Response
     {
         if (! $this->guards($request)) {
             return $next($request);
@@ -45,9 +46,10 @@ class EnsureIdempotency
 
         $cacheKey = $this->cacheKey($request, $key);
         $fingerprint = $this->fingerprint($request);
+        $ttl = $ttl !== null ? (int) $ttl : (int) $this->config('ttl', 86400);
 
         if ($stored = $this->repository->get($cacheKey)) {
-            return $this->replay($stored, $fingerprint);
+            return $this->replay($stored, $fingerprint, $request, $key);
         }
 
         $lock = $this->repository->lock($cacheKey, (int) $this->config('lock_timeout', 10));
@@ -60,7 +62,7 @@ class EnsureIdempotency
             // Another request may have completed between our first read and
             // acquiring the lock; re-check before doing the work again.
             if ($stored = $this->repository->get($cacheKey)) {
-                return $this->replay($stored, $fingerprint);
+                return $this->replay($stored, $fingerprint, $request, $key);
             }
 
             $response = $next($request);
@@ -69,7 +71,7 @@ class EnsureIdempotency
                 $this->repository->put(
                     $cacheKey,
                     StoredResponse::capture($response, $fingerprint, $this->config('persist_headers', [])),
-                    (int) $this->config('ttl', 86400),
+                    $ttl,
                 );
             }
 
@@ -124,11 +126,13 @@ class EnsureIdempotency
         ]));
     }
 
-    protected function replay(StoredResponse $stored, string $fingerprint): Response
+    protected function replay(StoredResponse $stored, string $fingerprint, Request $request, string $key): Response
     {
         if (! hash_equals($stored->fingerprint, $fingerprint)) {
             throw new IdempotencyConflictException;
         }
+
+        event(new IdempotentReplay($key, $request, $stored));
 
         return $this->mark($stored->toResponse(), replayed: true);
     }
