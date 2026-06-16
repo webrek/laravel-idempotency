@@ -4,6 +4,12 @@ All notable changes to `webrek/laravel-idempotency` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-16
+
+### Added
+
+- Laravel 13 support. The package now installs on Laravel 12 and 13 (PHP 8.2+).
+
 ## [1.1.0] - 2026-06-07
 
 ### Added

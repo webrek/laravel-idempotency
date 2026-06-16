@@ -91,7 +91,7 @@ exposes. There are no migrations and no new tables.
 | Component | Version |
 | --------- | ------- |
 | PHP | 8.2+ |
-| Laravel | 12.x |
+| Laravel | 12.x / 13.x |
 | Cache store | Any store that supports atomic locks (redis, memcached, dynamodb, database, file, array) |
 
 ## Configuration
