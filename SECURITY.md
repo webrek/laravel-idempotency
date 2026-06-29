@@ -1,14 +1,15 @@
-# Security Policy
+# Política de seguridad
 
-## Supported versions
+## Versiones soportadas
 
-The latest released minor version receives security fixes.
+La última versión menor publicada recibe correcciones de seguridad.
 
-## Reporting a vulnerability
+## Reportar una vulnerabilidad
 
-Please do not open a public issue for security problems. Report them privately
-through GitHub's [security advisory form](https://github.com/webrek/laravel-idempotency/security/advisories/new).
+Por favor no abras un *issue* público para problemas de seguridad. Repórtalos de
+forma privada a través del
+[formulario de avisos de seguridad de GitHub](https://github.com/webrek/laravel-idempotency/security/advisories/new).
 
-You can expect an initial response within a few business days. Once a fix is
-ready, a patched release is published and the advisory is disclosed with credit
-to the reporter unless anonymity is requested.
+Puedes esperar una primera respuesta en unos pocos días hábiles. Una vez lista
+la corrección, se publica una versión parchada y el aviso se divulga dando
+crédito a quien lo reportó, salvo que prefiera el anonimato.

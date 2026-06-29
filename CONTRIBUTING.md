@@ -1,8 +1,8 @@
-# Contributing
+# Contribuir
 
-Thanks for taking the time to contribute.
+Gracias por tomarte el tiempo de contribuir.
 
-## Getting started
+## Para empezar
 
 ```bash
 git clone https://github.com/webrek/laravel-idempotency
@@ -10,34 +10,29 @@ cd laravel-idempotency
 composer install
 ```
 
-## Before opening a pull request
+## Antes de abrir un pull request
 
-Run the full check suite locally — CI runs the same thing across the supported
-PHP and Laravel matrix:
+Corre la batería completa de revisiones localmente — CI corre lo mismo en toda
+la matriz de PHP soportada:
 
 ```bash
 make check     # pint --test, phpstan, phpunit
 ```
 
-Or individually:
+O por separado:
 
 ```bash
-composer pint        # format
-composer pint:check  # verify formatting without writing
-composer stan        # static analysis (level 6)
+composer pint        # formatear
+composer pint:check  # verificar formato sin escribir
+composer stan        # análisis estático (nivel 6)
 composer test        # phpunit
 ```
 
-## Guidelines
+## Lineamientos
 
-- Keep pull requests focused; one logical change per PR.
-- Add or update tests for any behaviour change. Bug fixes should come with a test
-  that fails before the fix.
-- Match the existing code style — Pint with the Laravel preset is the source of
-  truth, so run it before pushing.
-- Update `CHANGELOG.md` under the `Unreleased` heading.
-
-## Reporting bugs
-
-Open an issue with a minimal reproduction: the route definition, the request
-(method, headers, body) and the response you got versus the one you expected.
+- Mantén los *pull requests* enfocados; un cambio lógico por PR.
+- Agrega o actualiza pruebas para cualquier cambio de comportamiento. Las
+  correcciones de errores deben venir con una prueba que falle antes del arreglo.
+- Respeta el estilo de código existente — Pint con el *preset* de Laravel es la
+  fuente de verdad, así que córrelo antes de hacer *push*.
+- Actualiza `CHANGELOG.md` bajo el encabezado `Unreleased`.

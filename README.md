@@ -1,15 +1,16 @@
 # Laravel Idempotency
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/webrek/laravel-idempotency.svg?style=flat-square)](https://packagist.org/packages/webrek/laravel-idempotency)
-[![Total Downloads](https://img.shields.io/packagist/dt/webrek/laravel-idempotency.svg?style=flat-square)](https://packagist.org/packages/webrek/laravel-idempotency)
-[![Tests](https://img.shields.io/github/actions/workflow/status/webrek/laravel-idempotency/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/webrek/laravel-idempotency/actions/workflows/tests.yml)
-[![PHP Version](https://img.shields.io/packagist/php-v/webrek/laravel-idempotency.svg?style=flat-square)](https://php.net)
-[![License](https://img.shields.io/packagist/l/webrek/laravel-idempotency.svg?style=flat-square)](LICENSE)
+[![Última versión en Packagist](https://img.shields.io/packagist/v/webrek/laravel-idempotency.svg?style=flat-square)](https://packagist.org/packages/webrek/laravel-idempotency)
+[![Descargas totales](https://img.shields.io/packagist/dt/webrek/laravel-idempotency.svg?style=flat-square)](https://packagist.org/packages/webrek/laravel-idempotency)
+[![Pruebas](https://img.shields.io/github/actions/workflow/status/webrek/laravel-idempotency/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/webrek/laravel-idempotency/actions/workflows/tests.yml)
+[![Versión de PHP](https://img.shields.io/packagist/php-v/webrek/laravel-idempotency.svg?style=flat-square)](https://php.net)
+[![Licencia](https://img.shields.io/packagist/l/webrek/laravel-idempotency.svg?style=flat-square)](LICENSE)
 
-Safe request retries for Laravel APIs. A client sends an `Idempotency-Key`
-header with a write request; if that exact request arrives again — a retry
-after a timeout, a double-tapped button, a webhook redelivery — the original
-response is replayed instead of the action running twice.
+Reintentos de peticiones seguros para APIs de Laravel. Un cliente envía un
+encabezado `Idempotency-Key` con una petición de escritura; si esa misma
+petición llega de nuevo —un reintento tras un timeout, un botón pulsado dos
+veces, una reentrega de webhook— se reproduce la respuesta original en lugar de
+ejecutar la acción dos veces.
 
 ## Quickstart
 
@@ -17,14 +18,14 @@ response is replayed instead of the action running twice.
 composer require webrek/laravel-idempotency
 ```
 
-Attach the middleware to the routes that create or mutate state:
+Adjunta el *middleware* a las rutas que crean o modifican estado:
 
 ```php
 Route::post('/orders', [OrderController::class, 'store'])
     ->middleware('idempotency');
 ```
 
-Clients opt in per request by sending a unique key:
+Los clientes se suscriben por petición enviando una clave única:
 
 ```http
 POST /orders HTTP/1.1
@@ -34,70 +35,74 @@ Content-Type: application/json
 {"sku": "ABC-123", "qty": 2}
 ```
 
-The first call runs the controller and stores the response. Any repeat of that
-call within the retention window returns the stored response verbatim, with an
-`Idempotency-Replayed: true` header so the client can tell a replay from a fresh
-result. No key, no interception — existing callers keep working.
+La primera llamada ejecuta el controlador y almacena la respuesta. Cualquier
+repetición de esa llamada dentro de la ventana de retención devuelve la respuesta
+almacenada tal cual, con un encabezado `Idempotency-Replayed: true` para que el
+cliente pueda distinguir una reproducción de un resultado nuevo. Sin clave, no hay
+interceptación: quienes ya llaman a la API siguen funcionando.
 
-## The problem
+## El problema
 
-`POST` is not safe to retry. When a client fires a write request and the
-connection drops before the response comes back, it has no way to know whether
-the server processed it. Both choices are bad: retry and you risk a duplicate
-charge, order, or signup; don't retry and you risk silently losing the write.
+`POST` no es seguro de reintentar. Cuando un cliente lanza una petición de
+escritura y la conexión se cae antes de que regrese la respuesta, no tiene forma
+de saber si el servidor la procesó. Ambas opciones son malas: si reintentas,
+arriesgas un cargo, pedido o registro duplicado; si no reintentas, arriesgas
+perder la escritura en silencio.
 
-Idempotency keys resolve the ambiguity. The client generates one key per logical
-operation and reuses it on every retry of that operation. The server promises
-that all requests sharing a key produce **one** execution and the **same**
-response. This is how Stripe, PayPal, Adyen and most serious payment APIs make
-retries safe — and it is exactly what this package adds to your Laravel routes.
+Las claves de idempotencia resuelven la ambigüedad. El cliente genera una clave
+por operación lógica y la reutiliza en cada reintento de esa operación. El
+servidor promete que todas las peticiones que comparten una clave producen **una**
+ejecución y la **misma** respuesta. Así es como Stripe, PayPal, Adyen y la mayoría
+de las APIs de pago serias hacen seguros los reintentos, y es exactamente lo que
+este paquete añade a tus rutas de Laravel.
 
-## How it works
+## Cómo funciona
 
-The middleware sits in front of your guarded routes and does four things:
+El *middleware* se coloca delante de tus rutas protegidas y hace cuatro cosas:
 
-1. **Fingerprints the request.** A SHA-256 of the method, path and raw body is
-   stored alongside the response. If the same key arrives later with a different
-   payload, that is a client bug, and the request is rejected with `422` rather
-   than silently returning the wrong cached response.
-2. **Serialises concurrent duplicates with an atomic lock.** Two requests
-   carrying the same key at the same time cannot both execute. The first takes
-   the lock and runs; the second gets `409 Conflict` with a `Retry-After`
-   header. The lock auto-expires, so a crashed worker never wedges a key.
-3. **Replays the stored response.** Status code, body and a configurable set of
-   headers are returned on subsequent hits — without touching your controller,
-   queue jobs, or database.
-4. **Leaves failures retryable.** Server errors (`5xx`) are never stored, so a
-   client can safely retry after a transient failure. Successes and
-   deterministic client errors are replayed.
+1. **Genera una huella de la petición.** Un SHA-256 del método, la ruta y el
+   cuerpo crudo se almacena junto con la respuesta. Si la misma clave llega después
+   con un *payload* distinto, eso es un error del cliente, y la petición se rechaza
+   con `422` en lugar de devolver en silencio la respuesta en caché equivocada.
+2. **Serializa duplicados concurrentes con un *lock* atómico.** Dos peticiones que
+   llevan la misma clave al mismo tiempo no pueden ejecutarse ambas. La primera toma
+   el *lock* y se ejecuta; la segunda obtiene `409 Conflict` con un encabezado
+   `Retry-After`. El *lock* expira automáticamente, así que un worker caído nunca
+   deja atascada una clave.
+3. **Reproduce la respuesta almacenada.** El código de estado, el cuerpo y un
+   conjunto configurable de encabezados se devuelven en los accesos posteriores, sin
+   tocar tu controlador, tus jobs en cola ni tu base de datos.
+4. **Deja los fallos como reintentables.** Los errores de servidor (`5xx`) nunca se
+   almacenan, de modo que un cliente puede reintentar de forma segura tras un fallo
+   transitorio. Los éxitos y los errores de cliente deterministas sí se reproducen.
 
-Everything lives in Laravel's cache, using the same atomic locks `Cache::lock()`
-exposes. There are no migrations and no new tables.
+Todo vive en la caché de Laravel, usando los mismos *locks* atómicos que expone
+`Cache::lock()`. No hay migraciones ni tablas nuevas.
 
-## Behaviour at a glance
+## Comportamiento de un vistazo
 
-| Scenario | Result |
+| Escenario | Resultado |
 | --- | --- |
-| First request with a key | Executes, stores the response, `Idempotency-Replayed: false` |
-| Same key, same payload, after completion | Replays the stored response, `Idempotency-Replayed: true` |
-| Same key, same payload, still in flight | `409 Conflict` + `Retry-After` |
-| Same key, **different** payload | `422 Unprocessable Entity` |
-| No key (and `require_key` is false) | Passes through untouched |
-| `GET` / `HEAD` request | Ignored — already safe to repeat |
-| Response is `5xx` | Not stored — the next attempt re-executes |
+| Primera petición con una clave | Ejecuta, almacena la respuesta, `Idempotency-Replayed: false` |
+| Misma clave, mismo payload, tras completarse | Reproduce la respuesta almacenada, `Idempotency-Replayed: true` |
+| Misma clave, mismo payload, aún en curso | `409 Conflict` + `Retry-After` |
+| Misma clave, payload **distinto** | `422 Unprocessable Entity` |
+| Sin clave (y `require_key` es false) | Pasa de largo sin tocarse |
+| Petición `GET` / `HEAD` | Se ignora: ya es seguro repetirla |
+| La respuesta es `5xx` | No se almacena: el siguiente intento la vuelve a ejecutar |
 
-## Requirements
+## Requisitos
 
-| Component | Version |
+| Componente | Versión |
 | --------- | ------- |
 | PHP | 8.2+ |
 | Laravel | 12.x / 13.x |
-| Cache store | Any store that supports atomic locks (redis, memcached, dynamodb, database, file, array) |
+| Almacén de caché | Cualquier almacén que soporte locks atómicos (redis, memcached, dynamodb, database, file, array) |
 
-## Configuration
+## Configuración
 
-The defaults are production-ready. Publish the config only if you need to change
-them:
+Los valores por defecto están listos para producción. Publica la configuración
+solo si necesitas cambiarlos:
 
 ```bash
 php artisan vendor:publish --tag=idempotency-config
@@ -105,56 +110,57 @@ php artisan vendor:publish --tag=idempotency-config
 
 ```php
 return [
-    // Header clients send to identify a retryable operation.
+    // Encabezado que envían los clientes para identificar una operación reintentable.
     'header' => env('IDEMPOTENCY_HEADER', 'Idempotency-Key'),
 
-    // Reject keyless requests on guarded routes with a 400 when true.
+    // Rechaza con 400 las peticiones sin clave en rutas protegidas cuando es true.
     'require_key' => false,
 
-    // HTTP methods the middleware guards. GET/HEAD are already safe.
+    // Métodos HTTP que protege el middleware. GET/HEAD ya son seguros.
     'methods' => ['POST', 'PUT', 'PATCH', 'DELETE'],
 
-    // Cache store for stored responses and locks (null = default store).
+    // Almacén de caché para respuestas y locks (null = almacén por defecto).
     'store' => env('IDEMPOTENCY_STORE'),
 
     'prefix' => 'idempotency:',
 
-    // How long a response stays replayable, in seconds.
+    // Cuánto tiempo una respuesta sigue siendo reproducible, en segundos.
     'ttl' => (int) env('IDEMPOTENCY_TTL', 86400),
 
-    // Max time one request may hold its key's lock, in seconds.
+    // Tiempo máximo que una petición retiene el lock de su clave, en segundos.
     'lock_timeout' => 10,
 
     'max_key_length' => 255,
 
-    // Namespace keys by authenticated user so callers can't collide.
+    // Agrupa las claves por usuario autenticado para que no colisionen los llamadores.
     'scope_by_user' => true,
 
-    // Null replays everything < 500; or list explicit codes, e.g. [200, 201, 422].
+    // Null reproduce todo lo < 500; o lista códigos explícitos, p. ej. [200, 201, 422].
     'replay_status_codes' => null,
 
-    // Headers copied onto the replayed response.
+    // Encabezados copiados a la respuesta reproducida.
     'persist_headers' => ['Content-Type'],
 
-    // Marker added to every guarded response: "true" | "false".
+    // Marca agregada a cada respuesta protegida: "true" | "false".
     'replay_header' => 'Idempotency-Replayed',
 ];
 ```
 
-### Per-route retention
+### Retención por ruta
 
-Override the configured TTL (in seconds) for specific routes by passing it as a
-middleware parameter:
+Sobrescribe el TTL configurado (en segundos) para rutas específicas pasándolo como
+parámetro del *middleware*:
 
 ```php
-Route::post('/payments', ...)->middleware('idempotency:3600');   // 1 hour
-Route::post('/imports', ...)->middleware('idempotency:86400');   // 1 day
+Route::post('/payments', ...)->middleware('idempotency:3600');   // 1 hora
+Route::post('/imports', ...)->middleware('idempotency:86400');   // 1 día
 ```
 
-### Replay event
+### Evento de reproducción
 
-An `Idempotency\Events\IdempotentReplay` event is dispatched every time a stored
-response is replayed, so you can measure how many retries you are absorbing:
+Se despacha un evento `Idempotency\Events\IdempotentReplay` cada vez que se
+reproduce una respuesta almacenada, para que puedas medir cuántos reintentos estás
+absorbiendo:
 
 ```php
 use Webrek\Idempotency\Events\IdempotentReplay;
@@ -164,62 +170,64 @@ Event::listen(IdempotentReplay::class, function (IdempotentReplay $event) {
 });
 ```
 
-### Requiring a key on specific routes
+### Exigir una clave en rutas específicas
 
-Leave `require_key` off globally and opt individual routes in by flipping the
-config at the boundary, or set it to `true` if every guarded route must carry a
-key. With it on, a guarded request without the header is rejected with `400`
-before any work is done.
+Deja `require_key` desactivado globalmente y activa rutas individuales cambiando la
+configuración en el punto de entrada, o ponlo en `true` si toda ruta protegida debe
+llevar una clave. Con esto activado, una petición protegida sin el encabezado se
+rechaza con `400` antes de hacer cualquier trabajo.
 
-### Choosing a cache store
+### Elegir un almacén de caché
 
-Replays are only as durable as the store behind them. `array` is for tests; in
-production point `IDEMPOTENCY_STORE` at `redis` (or any shared, persistent store
-with atomic locks) so replays survive across web workers and deploys. A
-per-process store like `array` cannot coordinate locks across machines.
+Las reproducciones son tan duraderas como el almacén que las respalda. `array` es
+para pruebas; en producción apunta `IDEMPOTENCY_STORE` a `redis` (o cualquier
+almacén compartido y persistente con locks atómicos) para que las reproducciones
+sobrevivan entre web workers y despliegues. Un almacén por proceso como `array` no
+puede coordinar locks entre máquinas.
 
-## Client guidance
+## Guía para el cliente
 
-- **One key per logical operation, reused on retry.** Generate a UUID before the
-  first attempt and send the *same* value on every retry of that attempt. A new
-  key per retry defeats the purpose.
-- **Handle `409` by backing off and retrying** — it means an earlier attempt is
-  still running. Respect the `Retry-After` header.
-- **Treat `422` as a bug on your side** — it means you reused a key for a
-  genuinely different request.
+- **Una clave por operación lógica, reutilizada en el reintento.** Genera un UUID
+  antes del primer intento y envía el *mismo* valor en cada reintento de ese intento.
+  Una clave nueva por reintento anula el propósito.
+- **Maneja el `409` aplicando *backoff* y reintentando**: significa que un intento
+  anterior sigue ejecutándose. Respeta el encabezado `Retry-After`.
+- **Trata el `422` como un error de tu lado**: significa que reutilizaste una clave
+  para una petición genuinamente distinta.
 
-## Comparison with hand-rolled approaches
+## Comparación con enfoques caseros
 
-| Approach | Concurrency-safe | Payload mismatch detection | Replays full response | Migrations |
+| Enfoque | Seguro ante concurrencia | Detección de payload distinto | Reproduce la respuesta completa | Migraciones |
 | --- | --- | --- | --- | --- |
-| `firstOrCreate` on a `request_id` column | No (race between check and insert) | No | No | Yes |
-| Unique DB constraint + catch duplicate | Partially (relies on the write reaching the constrained table) | No | No | Yes |
-| This package | Yes (atomic lock) | Yes (request fingerprint) | Yes | No |
+| `firstOrCreate` sobre una columna `request_id` | No (carrera entre la comprobación y el insert) | No | No | Sí |
+| Restricción única en BD + capturar duplicado | Parcialmente (depende de que la escritura llegue a la tabla restringida) | No | No | Sí |
+| Este paquete | Sí (lock atómico) | Sí (huella de la petición) | Sí | No |
 
-A unique constraint stops a duplicate *row*, but it does not stop the duplicate
-side effects that ran before the insert (the email already sent, the third-party
-charge already made), and it gives the client an error instead of the original
-success. Idempotency at the HTTP boundary stops the second execution entirely
-and hands back the first response.
+Una restricción única detiene una *fila* duplicada, pero no detiene los efectos
+secundarios duplicados que se ejecutaron antes del insert (el correo ya enviado, el
+cargo de terceros ya realizado), y le devuelve al cliente un error en lugar del éxito
+original. La idempotencia en la frontera HTTP detiene por completo la segunda
+ejecución y devuelve la primera respuesta.
 
-## Testing
+## Pruebas
 
 ```bash
 composer install
 composer test
 ```
 
-The suite runs on the `array` cache store, so no external services are needed.
+La suite se ejecuta sobre el almacén de caché `array`, así que no se necesitan
+servicios externos.
 
-## Contributing
+## Contribuir
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Consulta [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Security
+## Seguridad
 
-Please review the [security policy](SECURITY.md) before reporting a
-vulnerability.
+Por favor revisa la [política de seguridad](SECURITY.md) antes de reportar una
+vulnerabilidad.
 
-## License
+## Licencia
 
-The MIT License (MIT). See [LICENSE](LICENSE).
+La Licencia MIT (MIT). Consulta [LICENSE](LICENSE).
