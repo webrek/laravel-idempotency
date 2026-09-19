@@ -58,10 +58,14 @@ retries safe, and it is exactly what this package adds to your Laravel routes.
 
 The middleware sits in front of your protected routes and does four things:
 
-1. **Fingerprints the request.** A SHA-256 of the method, path, and raw body is
-   stored alongside the response. If the same key later arrives with a different
-   payload, that is a client error, and the request is rejected with `422`
-   instead of silently returning the wrong cached response.
+1. **Fingerprints the request.** A SHA-256 of the method, the full URI
+   (including the query string), and the raw body is stored alongside the
+   response. For form and multipart requests — where the raw body is empty by
+   the time PHP has parsed it — the fingerprint instead covers the parsed
+   fields (order-independent) and, for each uploaded file, its field path,
+   original name, size, and content hash. If the same key later arrives with a
+   different payload, that is a client error, and the request is rejected with
+   `422` instead of silently returning the wrong cached response.
 2. **Serializes concurrent duplicates with an atomic lock.** Two requests
    carrying the same key at the same time cannot both run. The first takes the
    lock and executes; the second gets `409 Conflict` with a `Retry-After`
@@ -71,8 +75,9 @@ The middleware sits in front of your protected routes and does four things:
    set of headers are returned on subsequent hits, without touching your
    controller, your queued jobs, or your database.
 4. **Leaves failures retryable.** Server errors (`5xx`) are never stored, so a
-   client can safely retry after a transient failure. Successes and
-   deterministic client errors are replayed.
+   client can safely retry after a transient failure. Transient client errors
+   (`408`, `425`, `429` by default) are treated the same way. Successes and
+   other deterministic client errors are replayed.
 
 Everything lives in Laravel's cache, using the same atomic locks that
 `Cache::lock()` exposes. There are no migrations and no new tables.
@@ -88,6 +93,8 @@ Everything lives in Laravel's cache, using the same atomic locks that
 | No key (and `require_key` is false) | Passes through untouched |
 | `GET` / `HEAD` request | Ignored: already safe to repeat |
 | Response is `5xx` | Not stored: the next attempt re-runs it |
+| Response is `408`, `425`, or `429` | Not stored by default (`never_replay_status_codes`): the next attempt re-runs it |
+| Response body exceeds `max_body_size` | Not stored: the next attempt re-runs it |
 
 ## Requirements
 
@@ -125,19 +132,29 @@ return [
     // How long a response stays replayable, in seconds.
     'ttl' => (int) env('IDEMPOTENCY_TTL', 86400),
 
-    // Maximum time a request holds the lock for its key, in seconds.
-    'lock_timeout' => 10,
+    // Maximum time a request holds the lock for its key, in seconds. A request
+    // that runs longer than this may be executed twice by a concurrent retry.
+    'lock_timeout' => (int) env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
 
     'max_key_length' => 255,
 
     // Scopes keys per authenticated user so callers don't collide.
     'scope_by_user' => true,
 
-    // Null replays everything < 500; or list explicit codes, e.g. [200, 201, 422].
+    // Null replays everything < 500 and not in never_replay_status_codes; or
+    // list explicit codes, e.g. [200, 201, 422], to replay only those.
     'replay_status_codes' => null,
 
-    // Headers copied to the replayed response.
-    'persist_headers' => ['Content-Type'],
+    // Transient client errors that are never stored, even though they are
+    // below 500. Only consulted when replay_status_codes is null.
+    'never_replay_status_codes' => [408, 425, 429],
+
+    // Responses larger than this are never stored. 0 disables the limit.
+    'max_body_size' => 1024 * 1024,
+
+    // Headers copied to the replayed response. Location is always persisted
+    // even if removed from this list.
+    'persist_headers' => ['Content-Type', 'Location'],
 
     // Flag added to every protected response: "true" | "false".
     'replay_header' => 'Idempotency-Replayed',
@@ -154,10 +171,32 @@ Route::post('/payments', ...)->middleware('idempotency:3600');   // 1 hour
 Route::post('/imports', ...)->middleware('idempotency:86400');   // 1 day
 ```
 
+### Requiring a key on specific routes
+
+Leave `require_key` disabled globally (the default) and require a key only on
+the routes that need it by adding `required` as a middleware parameter:
+
+```php
+Route::post('/payments', ...)->middleware('idempotency:required');       // key required, default TTL
+Route::post('/imports', ...)->middleware('idempotency:3600,required');   // key required, 1 hour TTL
+```
+
+A keyless request on a `required` route is rejected with `400` before doing
+any work, regardless of the global `require_key` setting. Set `require_key` to
+`true` instead if every protected route must carry a key.
+
+### Lock timeout
+
+`lock_timeout` (or `IDEMPOTENCY_LOCK_TIMEOUT`) bounds how long a request may
+hold its key's lock. A request that runs longer than this may be executed
+twice by a concurrent retry that acquires the lock after it expires — size it
+comfortably above your slowest guarded request.
+
 ### Replay event
 
-An `Idempotency\Events\IdempotentReplay` event is dispatched every time a stored
-response is replayed, so you can measure how many retries you are absorbing:
+A `Webrek\Idempotency\Events\IdempotentReplay` event is dispatched every time a
+stored response is replayed, so you can measure how many retries you are
+absorbing:
 
 ```php
 use Webrek\Idempotency\Events\IdempotentReplay;
@@ -166,13 +205,6 @@ Event::listen(IdempotentReplay::class, function (IdempotentReplay $event) {
     Metrics::increment('idempotency.replays', tags: ['key' => $event->key]);
 });
 ```
-
-### Requiring a key on specific routes
-
-Leave `require_key` disabled globally and opt in individual routes by changing
-the configuration at the entry point, or set it to `true` if every protected
-route must carry a key. With this enabled, a protected request without the
-header is rejected with `400` before doing any work.
 
 ### Choosing a cache store
 
