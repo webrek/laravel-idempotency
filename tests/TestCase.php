@@ -27,4 +27,13 @@ abstract class TestCase extends Orchestra
         $app['config']->set('cache.default', 'array');
         $app['config']->set('idempotency.store', 'array');
     }
+
+    /**
+     * The cache key the middleware derives for an unscoped idempotency key,
+     * mirroring `EnsureIdempotency::cacheKey()`.
+     */
+    protected function cacheKeyFor(string $key): string
+    {
+        return hash('sha256', 'k:' . hash('sha256', $key));
+    }
 }

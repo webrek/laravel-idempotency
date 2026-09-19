@@ -79,7 +79,7 @@ class IdempotencyMiddlewareTest extends TestCase
     public function test_an_in_flight_key_returns_409(): void
     {
         $repository = $this->app->make(IdempotencyRepository::class);
-        $lock = $repository->lock(hash('sha256', 'abc'), 10);
+        $lock = $repository->lock($this->cacheKeyFor('abc'), 10);
 
         $this->assertTrue($lock->get());
 
@@ -109,6 +109,6 @@ class IdempotencyMiddlewareTest extends TestCase
 
         $store = $this->app->make(CacheFactory::class)->store('array');
 
-        $this->assertNotNull($store->get('idempotency:' . hash('sha256', 'abc')));
+        $this->assertNotNull($store->get('idempotency:' . $this->cacheKeyFor('abc')));
     }
 }

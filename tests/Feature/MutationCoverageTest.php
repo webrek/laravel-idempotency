@@ -29,7 +29,7 @@ class MutationCoverageTest extends TestCase
 
     public function test_concurrent_request_sets_retry_after_to_one(): void
     {
-        $lock = $this->app->make(IdempotencyRepository::class)->lock(hash('sha256', 'k'), 10);
+        $lock = $this->app->make(IdempotencyRepository::class)->lock($this->cacheKeyFor('k'), 10);
         $this->assertTrue($lock->get());
 
         try {
