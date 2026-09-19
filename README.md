@@ -56,7 +56,7 @@ retries safe, and it is exactly what this package adds to your Laravel routes.
 
 ## How it works
 
-The middleware sits in front of your protected routes and does four things:
+The middleware sits in front of your protected routes and does five things:
 
 1. **Fingerprints the request.** A SHA-256 of the method, the full URI
    (including the query string), and the raw body is stored alongside the
@@ -79,6 +79,12 @@ The middleware sits in front of your protected routes and does four things:
    client can safely retry after a transient failure. Transient client errors
    (`408`, `425`, `429` by default) are treated the same way. Successes and
    other deterministic client errors are replayed.
+5. **Never turns a completed request into an error.** If the cache becomes
+   unreachable *after* your controller ran, the fresh response is still
+   returned: the failure is reported to your exception handler and an
+   `IdempotencyStorageFailed` event fires. Nothing was stored, so a retry of
+   that key executes again (at-least-once), which is the correct fallback —
+   the alternative would be a `500` for work that already succeeded.
 
 Everything lives in Laravel's cache, using the same atomic locks that
 `Cache::lock()` exposes. There are no migrations and no new tables.
@@ -96,6 +102,7 @@ Everything lives in Laravel's cache, using the same atomic locks that
 | Response is `5xx` | Not stored: the next attempt re-runs it |
 | Response is `408`, `425`, or `429` | Not stored by default (`never_replay_status_codes`): the next attempt re-runs it |
 | Response body exceeds `max_body_size` | Not stored: the next attempt re-runs it |
+| Cache unreachable after the controller ran | Fresh response returned, failure reported, `IdempotencyStorageFailed` fired; the next attempt re-runs it |
 
 ## Requirements
 
@@ -204,6 +211,24 @@ use Webrek\Idempotency\Events\IdempotentReplay;
 
 Event::listen(IdempotentReplay::class, function (IdempotentReplay $event) {
     Metrics::increment('idempotency.replays', tags: ['key' => $event->key]);
+});
+```
+
+### Storage failure event
+
+`Webrek\Idempotency\Events\IdempotencyStorageFailed` is dispatched when the
+response could not be stored (`operation === 'put'`) or the key's lock could not
+be released (`operation === 'release'`) after the request already ran. The
+exception is also reported through your exception handler. Alert on this event:
+while it fires, retries are executing again instead of being replayed.
+
+```php
+Event::listen(IdempotencyStorageFailed::class, function (IdempotencyStorageFailed $event) {
+    Log::critical('idempotency store unavailable', [
+        'operation' => $event->operation,
+        'key' => $event->key,
+        'exception' => $event->exception->getMessage(),
+    ]);
 });
 ```
 

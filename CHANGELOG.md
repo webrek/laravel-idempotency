@@ -17,6 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to require a key on specific routes without flipping the global
   `require_key` setting.
 - `IDEMPOTENCY_LOCK_TIMEOUT` environment variable for `lock_timeout`.
+- `IdempotencyStorageFailed` event, dispatched when storing the response or
+  releasing the lock fails after the request already ran.
 
 ### Changed
 
@@ -41,6 +43,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A cache failure *after* the controller ran (storing the response or
+  releasing the lock) no longer surfaces as a `500` for work that already
+  succeeded: the fresh response is returned, the exception is reported and
+  `IdempotencyStorageFailed` fires. The retry executes again because nothing
+  was stored.
 - Replayed redirects and `201` responses no longer lose their `Location`
   header.
 - The fingerprint no longer ignores the query string, so requests differing

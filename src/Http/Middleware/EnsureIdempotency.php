@@ -3,7 +3,9 @@
 namespace Webrek\Idempotency\Http\Middleware;
 
 use Closure;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
@@ -11,7 +13,9 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
 use Webrek\Idempotency\Contracts\IdempotencyRepository;
+use Webrek\Idempotency\Events\IdempotencyStorageFailed;
 use Webrek\Idempotency\Events\IdempotentReplay;
 use Webrek\Idempotency\Exceptions\ConcurrentRequestException;
 use Webrek\Idempotency\Exceptions\IdempotencyConflictException;
@@ -30,6 +34,7 @@ class EnsureIdempotency
         protected IdempotencyRepository $repository,
         protected Config $config,
         protected Dispatcher $events,
+        protected ExceptionHandler $exceptions,
     ) {}
 
     public function handle(Request $request, Closure $next, string ...$options): Response
@@ -76,17 +81,53 @@ class EnsureIdempotency
             $response = $next($request);
 
             if ($this->isCacheable($response)) {
-                $this->repository->put(
-                    $cacheKey,
-                    StoredResponse::capture($response, $fingerprint, $this->persistedHeaders()),
-                    $ttl,
-                );
+                $this->store($cacheKey, $response, $fingerprint, $ttl, $request, $key);
             }
 
             return $this->mark($response, replayed: false);
         } finally {
-            $lock->release();
+            $this->release($lock, $request, $key);
         }
+    }
+
+    /**
+     * Persist the response for replay. The request has already run by now, so
+     * a store failure must not turn a successful execution into a 500 the
+     * client would retry: report it and hand back the fresh response instead.
+     */
+    protected function store(string $cacheKey, Response $response, string $fingerprint, int $ttl, Request $request, string $key): void
+    {
+        try {
+            $this->repository->put(
+                $cacheKey,
+                StoredResponse::capture($response, $fingerprint, $this->persistedHeaders()),
+                $ttl,
+            );
+        } catch (Throwable $e) {
+            $this->reportStorageFailure('put', $e, $request, $key);
+        }
+    }
+
+    /**
+     * Release the key's lock. The lock expires on its own, so a failure here
+     * is reported rather than allowed to mask the response being returned.
+     */
+    protected function release(Lock $lock, Request $request, string $key): void
+    {
+        try {
+            $lock->release();
+        } catch (Throwable $e) {
+            $this->reportStorageFailure('release', $e, $request, $key);
+        }
+    }
+
+    /**
+     * @param  'put'|'release'  $operation
+     */
+    protected function reportStorageFailure(string $operation, Throwable $e, Request $request, string $key): void
+    {
+        $this->exceptions->report($e);
+        $this->events->dispatch(new IdempotencyStorageFailed($operation, $key, $request, $e));
     }
 
     /**
