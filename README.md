@@ -60,12 +60,13 @@ The middleware sits in front of your protected routes and does four things:
 
 1. **Fingerprints the request.** A SHA-256 of the method, the full URI
    (including the query string), and the raw body is stored alongside the
-   response. For form and multipart requests — where the raw body is empty by
-   the time PHP has parsed it — the fingerprint instead covers the parsed
-   fields (order-independent) and, for each uploaded file, its field path,
-   original name, size, and content hash. If the same key later arrives with a
-   different payload, that is a client error, and the request is rejected with
-   `422` instead of silently returning the wrong cached response.
+   response, so JSON and form-encoded bodies are compared byte for byte. For
+   `multipart/form-data` requests, where PHP does not expose the raw body, the
+   fingerprint instead covers the parsed fields (order-independent) and, for
+   each uploaded file, its field path, original name, size, and content hash.
+   If the same key later arrives with a different payload, that is a client
+   error, and the request is rejected with `422` instead of silently returning
+   the wrong cached response.
 2. **Serializes concurrent duplicates with an atomic lock.** Two requests
    carrying the same key at the same time cannot both run. The first takes the
    lock and executes; the second gets `409 Conflict` with a `Retry-After`

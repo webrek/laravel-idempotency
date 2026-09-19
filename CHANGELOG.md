@@ -24,9 +24,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by 1.2.x are not replayed after upgrading; a retry of a request that was in
   flight during the deploy will execute again once.**
 - The request fingerprint now covers the full URI (including the query
-  string) instead of just the path, and — for form and multipart requests,
-  where the raw body is empty — the parsed input fields (order-independent)
-  and uploaded file contents, instead of only the raw body.
+  string) instead of just the path. When the raw body is unavailable — as
+  with `multipart/form-data`, which PHP does not expose through `php://input`
+  — it falls back to the parsed input fields (order-independent) and the
+  uploaded files' names, sizes and content hashes instead of an empty string.
 - The cache key is now derived from a hashed, namespaced representation of the
   key (and, when `scope_by_user` applies, the user's class and id), so a key
   containing the literal separator sequence used internally for user-scoping
@@ -44,9 +45,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   header.
 - The fingerprint no longer ignores the query string, so requests differing
   only by query string are no longer treated as identical.
-- The fingerprint no longer silently falls back to an empty raw body for
-  `multipart/form-data` and form-encoded requests, so a differing form payload
-  is now correctly rejected with `422` instead of being replayed.
+- The fingerprint no longer silently degrades to an empty raw body for
+  `multipart/form-data` requests, so a differing multipart payload (fields or
+  file contents) is now correctly rejected with `422` instead of being
+  replayed.
 - A guest sending a literal key such as `abc|u:5` can no longer land on user
   `5`'s entry for key `abc`.
 - `ttl` and `lock_timeout` of `0` or a negative number now raise an
