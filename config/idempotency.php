@@ -83,11 +83,13 @@ return [
     |
     | Upper bound a single request may hold its key's lock. It must outlast your
     | slowest guarded request, but stay short enough that a crashed worker frees
-    | the key for a legitimate retry instead of wedging it.
+    | the key for a legitimate retry instead of wedging it. A request that runs
+    | longer than this may be executed twice by a concurrent retry; size it
+    | above your slowest guarded request.
     |
     */
 
-    'lock_timeout' => 10,
+    'lock_timeout' => (int) env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
 
     /*
     |--------------------------------------------------------------------------
@@ -130,15 +132,44 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Never-replay status codes
+    |--------------------------------------------------------------------------
+    |
+    | Transient client errors that must never be stored, even though they are
+    | below 500 — the caller is expected to retry them, and a request that
+    | briefly fails with one of these should not be pinned to that outcome for
+    | the whole TTL. Only consulted when `replay_status_codes` is null; an
+    | explicit `replay_status_codes` allowlist always wins.
+    |
+    */
+
+    'never_replay_status_codes' => [408, 425, 429],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Maximum stored body size (bytes)
+    |--------------------------------------------------------------------------
+    |
+    | Responses larger than this are never stored, so a single oversized reply
+    | cannot exhaust your cache. Set to 0 to disable the limit.
+    |
+    */
+
+    'max_body_size' => 1024 * 1024,
+
+    /*
+    |--------------------------------------------------------------------------
     | Persisted response headers
     |--------------------------------------------------------------------------
     |
     | Headers copied onto the replayed response. Keep this tight — there is no
-    | need to replay per-request headers such as Date or Set-Cookie.
+    | need to replay per-request headers such as Date or Set-Cookie. `Location`
+    | is always persisted (redirects and `201 Created` responses need it to
+    | replay correctly) even if it is removed from this list.
     |
     */
 
-    'persist_headers' => ['Content-Type'],
+    'persist_headers' => ['Content-Type', 'Location'],
 
     /*
     |--------------------------------------------------------------------------
