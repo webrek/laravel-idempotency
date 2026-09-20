@@ -10,25 +10,25 @@ use Webrek\Idempotency\StoredResponse;
  * Wraps the real repository so `wait_for_completion` tests can control what
  * the middleware sees without a real concurrent process: `lock()` always
  * hands back the given `ScriptedLock`, the first `get()` call (before the
- * lock is acquired) always misses, and every call after that returns
- * whatever the test configured — simulating the original request completing
- * while this one was blocked.
+ * lock attempt) always misses, and every call after that returns whatever
+ * the test configured — simulating the original request completing while
+ * this one was waiting.
  */
 final class ScriptedRepository implements IdempotencyRepository
 {
-    private int $calls = 0;
+    public int $getCalls = 0;
 
     public function __construct(
         protected IdempotencyRepository $repository,
         protected ScriptedLock $scriptedLock,
-        protected ?StoredResponse $afterBlock = null,
+        protected ?StoredResponse $afterWait = null,
     ) {}
 
     public function get(string $key): ?StoredResponse
     {
-        $this->calls++;
+        $this->getCalls++;
 
-        return $this->calls === 1 ? null : $this->afterBlock;
+        return $this->getCalls === 1 ? null : $this->afterWait;
     }
 
     public function put(string $key, StoredResponse $response, int $ttl): void

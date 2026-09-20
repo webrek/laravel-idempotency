@@ -203,10 +203,11 @@ return [
     | Wait for an in-progress request to finish
     |--------------------------------------------------------------------------
     |
-    | Instead of an immediate 409 when a key is already in progress, block for
-    | up to this many seconds and replay the response if the original request
-    | finishes in time. Handy for double-clicked web forms; keep it small
-    | (1-3 seconds). 0 disables waiting and returns 409 immediately.
+    | Instead of an immediate 409 when a key is already in progress, wait up
+    | to this many seconds, polling the store every 100 ms, and replay the
+    | response as soon as the original request stores it. Handy for
+    | double-clicked web forms; keep it small (1-3 seconds). 0 disables
+    | waiting and returns 409 immediately.
     |
     */
 

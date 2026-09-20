@@ -4,7 +4,6 @@ namespace Webrek\Idempotency\Http\Middleware;
 
 use Closure;
 use Illuminate\Contracts\Cache\Lock;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
@@ -35,6 +34,12 @@ use Webrek\Idempotency\Support\FlashData;
  */
 class EnsureIdempotency
 {
+    /**
+     * How often a waiting request re-checks the store while
+     * `wait_for_completion` is in effect.
+     */
+    protected const POLL_INTERVAL_MICROSECONDS = 100_000;
+
     public function __construct(
         protected IdempotencyRepository $repository,
         protected Config $config,
@@ -78,14 +83,21 @@ class EnsureIdempotency
 
         $lock = $this->repository->lock($cacheKey, $lockTimeout);
 
-        if (! $this->acquire($lock)) {
-            return $this->reject(new ConcurrentRequestException, $request);
+        if (! $lock->get()) {
+            $outcome = $this->awaitCompletion($cacheKey, $lock);
+
+            if ($outcome instanceof StoredResponse) {
+                return $this->replay($outcome, $fingerprint, $request, $key);
+            }
+
+            if ($outcome === false) {
+                return $this->reject(new ConcurrentRequestException, $request);
+            }
         }
 
         try {
-            // Another request may have completed — or, when wait_for_completion
-            // let us block above, still be finishing — between our first read
-            // and acquiring the lock; re-check before doing the work again.
+            // Another request may have completed between our first read and
+            // acquiring the lock; re-check before doing the work again.
             if ($stored = $this->repository->get($cacheKey)) {
                 return $this->replay($stored, $fingerprint, $request, $key);
             }
@@ -103,30 +115,36 @@ class EnsureIdempotency
     }
 
     /**
-     * Acquire the key's lock. When it is already held, block for up to
-     * `wait_for_completion` seconds instead of failing immediately — the
-     * caller then re-checks the store, so a request that finishes inside the
-     * window is replayed rather than rejected.
+     * The key's lock is held by another request. When `wait_for_completion`
+     * allows, poll for up to that many seconds and hand back the stored
+     * response as soon as the original completes — a replay never needs the
+     * lock, so concurrent waiters do not queue behind each other. Returns true
+     * if the lock frees up with nothing stored (the original failed and may be
+     * retried by this request), or false on timeout.
      */
-    protected function acquire(Lock $lock): bool
+    protected function awaitCompletion(string $cacheKey, Lock $lock): StoredResponse|bool
     {
-        if ($lock->get()) {
-            return true;
-        }
-
         $wait = (int) $this->config('wait_for_completion', 0);
 
         if ($wait < 1) {
             return false;
         }
 
-        try {
-            $lock->block($wait);
+        $deadline = microtime(true) + $wait;
 
-            return true;
-        } catch (LockTimeoutException) {
-            return false;
-        }
+        do {
+            usleep(self::POLL_INTERVAL_MICROSECONDS);
+
+            if ($stored = $this->repository->get($cacheKey)) {
+                return $stored;
+            }
+
+            if ($lock->get()) {
+                return true;
+            }
+        } while (microtime(true) < $deadline);
+
+        return false;
     }
 
     /**

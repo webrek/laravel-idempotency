@@ -14,6 +14,8 @@ use Webrek\Idempotency\Tests\TestCase;
 
 class WaitForCompletionTest extends TestCase
 {
+    private ScriptedRepository $repository;
+
     protected function defineRoutes($router): void
     {
         /** @var Router $router */
@@ -23,135 +25,143 @@ class WaitForCompletionTest extends TestCase
         $router->middleware('idempotency')->post('/api-orders', fn () => response()->json(['id' => Counter::next()], 201));
     }
 
-    private function useScriptedRepository(ScriptedLock $lock, ?StoredResponse $afterBlock = null): void
+    private function useScriptedRepository(ScriptedLock $lock, ?StoredResponse $afterWait = null): void
     {
-        $repository = new ScriptedRepository($this->app->make(IdempotencyRepository::class), $lock, $afterBlock);
+        $this->repository = new ScriptedRepository($this->app->make(IdempotencyRepository::class), $lock, $afterWait);
 
-        $this->app->instance(IdempotencyRepository::class, $repository);
+        $this->app->instance(IdempotencyRepository::class, $this->repository);
     }
 
-    public function test_a_successful_block_replays_the_response_found_on_the_second_check(): void
+    private function storedFor(string $path, array $input): StoredResponse
+    {
+        // Mirrors EnsureIdempotency::fingerprint() for a form POST (empty raw
+        // body, so it falls back to the normalised, JSON-encoded input).
+        $fingerprint = hash('sha256', implode('|', ['POST', $path, json_encode($input)]));
+
+        return new StoredResponse(201, '{"id":99}', ['Content-Type' => 'application/json'], $fingerprint);
+    }
+
+    public function test_a_response_stored_while_waiting_is_replayed_without_taking_the_lock(): void
     {
         config(['idempotency.wait_for_completion' => 2]);
 
-        // Mirrors EnsureIdempotency::fingerprint() for a form POST (empty raw
-        // body, so it falls back to the normalised, JSON-encoded input) so
-        // the scripted response the second `get()` returns is accepted as a
-        // match instead of tripping the conflict check.
-        $fingerprint = hash('sha256', implode('|', ['POST', '/api-orders', json_encode(['sku' => 'A'])]));
-
-        $lock = new ScriptedLock(blockSucceeds: true);
-        $stored = new StoredResponse(201, '{"id":99}', ['Content-Type' => 'application/json'], $fingerprint);
-        $this->useScriptedRepository($lock, $stored);
+        $lock = new ScriptedLock([false]);
+        $this->useScriptedRepository($lock, $this->storedFor('/api-orders', ['sku' => 'A']));
 
         $this->post('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(201)
             ->assertJson(['id' => 99])
             ->assertHeader('Idempotency-Replayed', 'true');
 
-        $this->assertTrue($lock->blockCalled);
+        $this->assertSame(1, $lock->getCalls, 'The lock must only be tried once; a replay needs no lock.');
+        $this->assertSame(2, $this->repository->getCalls);
+        $this->assertFalse($lock->blockCalled);
         $this->assertSame(0, Counter::$count);
     }
 
-    public function test_a_successful_block_with_nothing_stored_executes_fresh(): void
+    public function test_a_lock_that_frees_up_with_nothing_stored_executes_fresh(): void
     {
         config(['idempotency.wait_for_completion' => 2]);
 
-        $lock = new ScriptedLock(blockSucceeds: true);
+        $lock = new ScriptedLock([false, true]);
         $this->useScriptedRepository($lock);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(201)
             ->assertHeader('Idempotency-Replayed', 'false');
 
-        $this->assertTrue($lock->blockCalled);
+        $this->assertSame(2, $lock->getCalls);
         $this->assertSame(1, Counter::$count);
     }
 
-    public function test_a_timed_out_block_returns_409_on_an_api_route(): void
+    public function test_a_timed_out_wait_returns_409_on_an_api_route(): void
     {
-        config(['idempotency.wait_for_completion' => 2]);
+        config(['idempotency.wait_for_completion' => 1]);
 
-        $lock = new ScriptedLock(blockSucceeds: false);
+        $lock = new ScriptedLock([false]);
         $this->useScriptedRepository($lock);
+
+        $started = microtime(true);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(409);
 
-        $this->assertTrue($lock->blockCalled);
+        $this->assertGreaterThanOrEqual(1.0, microtime(true) - $started);
+        $this->assertGreaterThan(2, $lock->getCalls, 'The wait must keep polling until the deadline.');
+        $this->assertLessThan(30, $this->repository->getCalls, 'Polling must pause between checks, not spin.');
         $this->assertSame(0, Counter::$count);
     }
 
-    public function test_a_timed_out_block_redirects_back_with_the_in_progress_message_on_a_web_route(): void
+    public function test_a_timed_out_wait_redirects_back_with_the_in_progress_message_on_a_web_route(): void
     {
-        config(['idempotency.wait_for_completion' => 2]);
+        config(['idempotency.wait_for_completion' => 1]);
         $this->withoutMiddleware(VerifyCsrfToken::class);
 
-        $lock = new ScriptedLock(blockSucceeds: false);
+        $lock = new ScriptedLock([false]);
         $this->useScriptedRepository($lock);
 
         $this->post('/form', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(302)
             ->assertSessionHasErrors(['idempotency' => 'Your previous submission is still being processed. Please wait a moment and try again.']);
 
-        $this->assertTrue($lock->blockCalled);
         $this->assertSame(0, Counter::$count);
     }
 
-    public function test_a_zero_wait_never_calls_block(): void
+    public function test_a_zero_wait_rejects_immediately(): void
     {
         config(['idempotency.wait_for_completion' => 0]);
 
-        $lock = new ScriptedLock(blockSucceeds: true);
+        $lock = new ScriptedLock([false, true]);
         $this->useScriptedRepository($lock);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(409);
 
-        $this->assertFalse($lock->blockCalled);
+        $this->assertSame(1, $lock->getCalls);
+        $this->assertSame(1, $this->repository->getCalls);
         $this->assertSame(0, Counter::$count);
     }
 
-    public function test_the_default_wait_for_completion_is_zero_and_never_blocks(): void
+    public function test_the_default_wait_for_completion_is_zero(): void
     {
         // Drop the key entirely so the middleware's own hard-coded default —
         // not the value shipped in config/idempotency.php — is exercised.
         config(['idempotency' => Arr::except(config('idempotency'), ['wait_for_completion'])]);
 
-        $lock = new ScriptedLock(blockSucceeds: true);
+        $lock = new ScriptedLock([false, true]);
         $this->useScriptedRepository($lock);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(409);
 
-        $this->assertFalse($lock->blockCalled);
+        $this->assertSame(1, $lock->getCalls);
         $this->assertSame(0, Counter::$count);
     }
 
-    public function test_a_wait_of_exactly_one_second_still_blocks(): void
+    public function test_a_wait_of_exactly_one_second_still_polls(): void
     {
         config(['idempotency.wait_for_completion' => 1]);
 
-        $lock = new ScriptedLock(blockSucceeds: true);
+        $lock = new ScriptedLock([false, true]);
         $this->useScriptedRepository($lock);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])
             ->assertStatus(201)
             ->assertHeader('Idempotency-Replayed', 'false');
 
-        $this->assertTrue($lock->blockCalled);
+        $this->assertSame(2, $lock->getCalls);
         $this->assertSame(1, Counter::$count);
     }
 
-    public function test_a_non_integer_wait_for_completion_is_cast_to_an_int_before_blocking(): void
+    public function test_a_numeric_string_wait_still_polls(): void
     {
         config(['idempotency.wait_for_completion' => '2']);
 
-        $lock = new ScriptedLock(blockSucceeds: true);
+        $lock = new ScriptedLock([false, true]);
         $this->useScriptedRepository($lock);
 
         $this->postJson('/api-orders', ['sku' => 'A'], ['Idempotency-Key' => 'k'])->assertStatus(201);
 
-        $this->assertSame(2, $lock->blockSeconds);
+        $this->assertSame(2, $lock->getCalls);
     }
 }

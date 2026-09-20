@@ -29,8 +29,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request carries a session and does not expect JSON. Translations are
   published under the `idempotency-lang` tag (English and Spanish included).
 - `wait_for_completion` config key (default `0`): instead of an immediate
-  `409` when a key is already in progress, block for up to this many seconds
-  and replay the response if the original request finishes in time.
+  `409` when a key is already in progress, wait up to this many seconds,
+  polling the store, and replay the response as soon as the original request
+  stores it. Replays need no lock, so concurrent duplicates are all answered
+  at once.
 
 ### Changed
 

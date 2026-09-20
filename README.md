@@ -96,7 +96,7 @@ Everything lives in Laravel's cache, using the same atomic locks that
 | First request with a key | Executes, stores the response, `Idempotency-Replayed: false` |
 | Same key, same payload, after completion | Replays the stored response, `Idempotency-Replayed: true` |
 | Same key, same payload, still in progress | `409 Conflict` + `Retry-After` |
-| Same key, still in progress, `wait_for_completion` > 0 | Blocks up to that many seconds, then replays if the original finished in time, otherwise `409` |
+| Same key, still in progress, `wait_for_completion` > 0 | Waits up to that many seconds, replaying as soon as the original finishes, otherwise `409` |
 | Same key, **different** payload | `422 Unprocessable Entity` |
 | No key (and `require_key` is false) | Passes through untouched |
 | `GET` / `HEAD` request | Ignored: already safe to repeat |
@@ -173,9 +173,8 @@ return [
     // `@idempotencyKey` Blade directive. Null disables the fallback.
     'input' => '_idempotency_key',
 
-    // Instead of an immediate 409, block for up to this many seconds and
-    // replay the response if the in-progress request finishes in time. 0
-    // disables waiting.
+    // Instead of an immediate 409, wait up to this many seconds for the
+    // in-progress request to finish and replay its response. 0 disables it.
     'wait_for_completion' => 0,
 
     // Re-flashes the session data (errors, old input, status) captured
@@ -299,12 +298,16 @@ php artisan vendor:publish --tag=idempotency-lang
 
 #### Waiting for an in-progress submission
 
-`wait_for_completion` (default `0`, seconds) blocks briefly instead of
+`wait_for_completion` (default `0`, seconds) waits briefly instead of
 returning an immediate `409` when the same key is already being processed —
 useful for a genuine double-click, where the first submission usually
-finishes within a second or two. Keep it small (1-3 seconds) on web workers;
-if the wait times out, the request falls back to the same in-progress
-rejection described above.
+finishes within a second or two. While waiting, the request polls the store
+every 100 ms and replays the response the moment the original stores it; a
+replay needs no lock, so any number of concurrent duplicates are answered at
+once rather than one after another. If the original fails and frees the key
+instead, the waiting request executes it. Keep the wait small (1-3 seconds)
+on web workers; if it times out, the request falls back to the same
+in-progress rejection described above.
 
 #### TTL
 
