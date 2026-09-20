@@ -26,6 +26,7 @@ use Webrek\Idempotency\Exceptions\IdempotencyConflictException;
 use Webrek\Idempotency\Exceptions\InvalidIdempotencyKeyException;
 use Webrek\Idempotency\Exceptions\MissingIdempotencyKeyException;
 use Webrek\Idempotency\StoredResponse;
+use Webrek\Idempotency\Support\FlashData;
 
 /**
  * Replays the original response for a repeated Idempotency-Key instead of
@@ -150,7 +151,9 @@ class EnsureIdempotency
      * Capture the session flash data set while the request just executed, so
      * a later replay can re-flash it. Without this, a replayed redirect is
      * "the next request" from the session's point of view: it ages the
-     * original flash away instead of showing it again.
+     * original flash away instead of showing it again. Error bags are packed
+     * to plain arrays so the value survives stores that refuse to unserialise
+     * objects.
      *
      * @return array<string, mixed>
      */
@@ -171,7 +174,7 @@ class EnsureIdempotency
             $flash[(string) $flashKey] = $session->get((string) $flashKey);
         }
 
-        return $flash;
+        return FlashData::pack($flash);
     }
 
     /**
@@ -420,7 +423,7 @@ class EnsureIdempotency
         if ($this->config('replay_flash', true) && $request->hasSession()) {
             $session = $request->session();
 
-            foreach ($stored->flash as $flashKey => $value) {
+            foreach (FlashData::unpack($stored->flash) as $flashKey => $value) {
                 $session->flash($flashKey, $value);
             }
         }

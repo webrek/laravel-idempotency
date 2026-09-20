@@ -19,6 +19,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   re-flashes the session data (errors, old input, status) captured when it
   was first stored, so a replayed validation redirect still shows its errors
   and old input, and a replayed success redirect still shows its status.
+  Error bags are stored as plain arrays and rebuilt on replay, so this works
+  with `cache.serializable_classes => false` (Laravel's default); other
+  objects flashed via `with()` are not replayed.
 - `redirect_back` and `error_key` config keys (defaults `true` and
   `idempotency`): the four client-facing rejections (missing key, invalid
   key, conflict, in-progress) now redirect back with the input re-flashed and

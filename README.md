@@ -263,6 +263,13 @@ was first executed — errors, old input, status, or anything else flashed via
 the replay is returned, so the second submission's redirect looks exactly
 like the first.
 
+Laravel's cache stores refuse to unserialise objects unless they are
+allowlisted (`cache.serializable_classes`, `false` by default), so the flash is
+stored as plain data: validation error bags (`ViewErrorBag`, `MessageBag`) are
+flattened on the way in and rebuilt on replay, scalars and plain arrays pass
+through untouched, and any other object flashed via `with()` is dropped rather
+than risk an incomplete class on replay.
+
 That flash data lands in the same cache entry as the response, with the same
 sensitivity as the session itself. Laravel already keeps `password`,
 `password_confirmation`, and `current_password` out of the flashed old input,
