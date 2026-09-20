@@ -1,4 +1,4 @@
-# Design: in-progress marker (planned for 1.4.0)
+# Design: in-progress marker (planned for 1.5.0)
 
 Status: proposal, not implemented. Written 2026-09-19 after validating 1.3.0 in a
 production-like sandbox (nginx + php-fpm + Redis).

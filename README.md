@@ -96,6 +96,7 @@ Everything lives in Laravel's cache, using the same atomic locks that
 | First request with a key | Executes, stores the response, `Idempotency-Replayed: false` |
 | Same key, same payload, after completion | Replays the stored response, `Idempotency-Replayed: true` |
 | Same key, same payload, still in progress | `409 Conflict` + `Retry-After` |
+| Same key, still in progress, `wait_for_completion` > 0 | Blocks up to that many seconds, then replays if the original finished in time, otherwise `409` |
 | Same key, **different** payload | `422 Unprocessable Entity` |
 | No key (and `require_key` is false) | Passes through untouched |
 | `GET` / `HEAD` request | Ignored: already safe to repeat |
@@ -103,6 +104,7 @@ Everything lives in Laravel's cache, using the same atomic locks that
 | Response is `408`, `425`, or `429` | Not stored by default (`never_replay_status_codes`): the next attempt re-runs it |
 | Response body exceeds `max_body_size` | Not stored: the next attempt re-runs it |
 | Cache unreachable after the controller ran | Fresh response returned, failure reported, `IdempotencyStorageFailed` fired; the next attempt re-runs it |
+| Browser form request rejected (missing/invalid/conflicting key, in-progress) | Redirects back with the input re-flashed and a translated message, instead of throwing (`redirect_back`, session requests only) |
 
 ## Requirements
 
@@ -166,6 +168,27 @@ return [
 
     // Flag added to every protected response: "true" | "false".
     'replay_header' => 'Idempotency-Replayed',
+
+    // Form field read when the header is absent or blank. Rendered by the
+    // `@idempotencyKey` Blade directive. Null disables the fallback.
+    'input' => '_idempotency_key',
+
+    // Instead of an immediate 409, block for up to this many seconds and
+    // replay the response if the in-progress request finishes in time. 0
+    // disables waiting.
+    'wait_for_completion' => 0,
+
+    // Re-flashes the session data (errors, old input, status) captured
+    // alongside a stored response when it is replayed.
+    'replay_flash' => true,
+
+    // Redirects back with a translated error instead of throwing, for a
+    // request that carries a session and does not expect JSON.
+    'redirect_back' => true,
+
+    // Key under which the translated rejection message is flashed to the
+    // errors bag, e.g. $errors->first('idempotency').
+    'error_key' => 'idempotency',
 ];
 ```
 
@@ -178,6 +201,123 @@ middleware parameter:
 Route::post('/payments', ...)->middleware('idempotency:3600');   // 1 hour
 Route::post('/imports', ...)->middleware('idempotency:86400');   // 1 day
 ```
+
+### Web forms (Blade)
+
+Classic HTML forms cannot send custom headers, their responses are redirects
+carrying session flash data instead of a JSON body, and a human — not a
+retrying HTTP client — is on the other side. This package supports that case
+too.
+
+Add the hidden field to any form on a route guarded by the `idempotency`
+middleware:
+
+```blade
+<form method="POST" action="/orders">
+    @csrf
+    @idempotencyKey
+    {{-- ... --}}
+</form>
+```
+
+`@idempotencyKey` renders a hidden input carrying a fresh UUID, using the
+field name configured under `input` (default `_idempotency_key`):
+
+```html
+<input type="hidden" name="_idempotency_key" value="9b1f2b1e-...-...">
+```
+
+The middleware reads this field only when the `Idempotency-Key` header is
+absent or blank — a header, when present, always wins — so the same route
+keeps working for API clients that send the header directly. Set `input` to
+`null` to disable the field fallback and require the header everywhere.
+
+With this in place:
+
+- **Double-click**: a second click before the page navigates away resubmits
+  the exact same in-memory form, hidden field included, so it replays the
+  first response instead of creating a duplicate.
+- **F5 / reload on the response page, or back-then-forward**: a browser's
+  native "resend form data" resubmits the exact same `POST` body, hidden
+  field included, so this replays too.
+- **Validation error**: this is where flash replay (below) matters. The
+  redirect back to the form is a fresh `GET`, so `@idempotencyKey` mints a
+  new value for that page load — correcting the input and resubmitting is a
+  genuinely different submission and executes normally, it does not replay a
+  stale error. What *does* replay is resubmitting the same invalid data a
+  second time (double-click or resend, as above): previously that lost its
+  error message and old input on the replay; now it shows them correctly.
+- **Back button**: only replays if the browser restores the exact prior
+  `POST` (native resubmission) rather than a fresh `GET` re-render of the
+  form.
+
+#### Flash replay
+
+A replayed redirect is, from the session's point of view, "the next
+request": it ages the original flash data without re-flashing it, so a
+naively replayed validation redirect would show no errors and no old input,
+and a replayed success redirect would lose its status message. When
+`replay_flash` is `true` (the default), the flash data set while the request
+was first executed — errors, old input, status, or anything else flashed via
+`with()` — is captured alongside the stored response and re-flashed before
+the replay is returned, so the second submission's redirect looks exactly
+like the first.
+
+That flash data lands in the same cache entry as the response, with the same
+sensitivity as the session itself. Laravel already keeps `password`,
+`password_confirmation`, and `current_password` out of the flashed old input,
+so they are never captured either.
+
+#### Human-friendly rejections
+
+By default (`redirect_back` is `true`), the four client-facing rejections —
+missing key, invalid key, conflict, in-progress — redirect back instead of
+throwing, whenever the request carries a session and does not expect JSON
+(API requests, and any request sending `Accept: application/json`, keep
+getting the plain `400`/`409`/`422` response). The input is re-flashed
+(except passwords and the `input` field above) and a translated message is
+flashed to the `errors` bag under `error_key` (default `idempotency`):
+
+```blade
+@error('idempotency')
+    <div class="alert alert-danger">{{ $message }}</div>
+@enderror
+```
+
+Translations ship in English and Spanish and are published with:
+
+```bash
+php artisan vendor:publish --tag=idempotency-lang
+```
+
+#### Waiting for an in-progress submission
+
+`wait_for_completion` (default `0`, seconds) blocks briefly instead of
+returning an immediate `409` when the same key is already being processed —
+useful for a genuine double-click, where the first submission usually
+finishes within a second or two. Keep it small (1-3 seconds) on web workers;
+if the wait times out, the request falls back to the same in-progress
+rejection described above.
+
+#### TTL
+
+Form routes are a good fit for a shorter, generous retention than the
+24-hour API default — long enough to cover a double-click or an accidental
+reload, short enough that a genuinely new submission a day later isn't
+mistaken for a retry:
+
+```php
+Route::post('/orders', ...)->middleware('idempotency:3600'); // 1 hour
+```
+
+#### Inertia, Livewire, and Filament
+
+Inertia requests carry the `Idempotency-Key` header like any other client —
+generate one UUID per form instance (e.g. on mount) and send it with the
+request, the same as a JSON API consumer would; the `input` field fallback
+above is not needed. Livewire and Filament actions are dispatched over JSON
+and Livewire already guards against double-submission on the client side, so
+they are out of scope for this feature.
 
 ### Requiring a key on specific routes
 

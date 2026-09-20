@@ -4,15 +4,19 @@ namespace Webrek\Idempotency\Http\Middleware;
 
 use Closure;
 use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Translation\Translator;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Redirector;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 use Webrek\Idempotency\Contracts\IdempotencyRepository;
 use Webrek\Idempotency\Events\IdempotencyStorageFailed;
@@ -35,6 +39,8 @@ class EnsureIdempotency
         protected Config $config,
         protected Dispatcher $events,
         protected ExceptionHandler $exceptions,
+        protected Redirector $redirector,
+        protected Translator $translator,
     ) {}
 
     public function handle(Request $request, Closure $next, string ...$options): Response
@@ -45,11 +51,15 @@ class EnsureIdempotency
             return $next($request);
         }
 
-        $key = $this->resolveKey($request);
+        try {
+            $key = $this->resolveKey($request);
+        } catch (InvalidIdempotencyKeyException $e) {
+            return $this->reject($e, $request);
+        }
 
         if ($key === null) {
             if ($required || $this->config('require_key', false)) {
-                throw new MissingIdempotencyKeyException($this->config('header', 'Idempotency-Key'));
+                return $this->reject(new MissingIdempotencyKeyException($this->config('header', 'Idempotency-Key')), $request);
             }
 
             return $next($request);
@@ -67,13 +77,14 @@ class EnsureIdempotency
 
         $lock = $this->repository->lock($cacheKey, $lockTimeout);
 
-        if (! $lock->get()) {
-            throw new ConcurrentRequestException;
+        if (! $this->acquire($lock)) {
+            return $this->reject(new ConcurrentRequestException, $request);
         }
 
         try {
-            // Another request may have completed between our first read and
-            // acquiring the lock; re-check before doing the work again.
+            // Another request may have completed — or, when wait_for_completion
+            // let us block above, still be finishing — between our first read
+            // and acquiring the lock; re-check before doing the work again.
             if ($stored = $this->repository->get($cacheKey)) {
                 return $this->replay($stored, $fingerprint, $request, $key);
             }
@@ -91,6 +102,33 @@ class EnsureIdempotency
     }
 
     /**
+     * Acquire the key's lock. When it is already held, block for up to
+     * `wait_for_completion` seconds instead of failing immediately — the
+     * caller then re-checks the store, so a request that finishes inside the
+     * window is replayed rather than rejected.
+     */
+    protected function acquire(Lock $lock): bool
+    {
+        if ($lock->get()) {
+            return true;
+        }
+
+        $wait = (int) $this->config('wait_for_completion', 0);
+
+        if ($wait < 1) {
+            return false;
+        }
+
+        try {
+            $lock->block($wait);
+
+            return true;
+        } catch (LockTimeoutException) {
+            return false;
+        }
+    }
+
+    /**
      * Persist the response for replay. The request has already run by now, so
      * a store failure must not turn a successful execution into a 500 the
      * client would retry: report it and hand back the fresh response instead.
@@ -100,12 +138,40 @@ class EnsureIdempotency
         try {
             $this->repository->put(
                 $cacheKey,
-                StoredResponse::capture($response, $fingerprint, $this->persistedHeaders()),
+                StoredResponse::capture($response, $fingerprint, $this->persistedHeaders(), $this->flash($request)),
                 $ttl,
             );
         } catch (Throwable $e) {
             $this->reportStorageFailure('put', $e, $request, $key);
         }
+    }
+
+    /**
+     * Capture the session flash data set while the request just executed, so
+     * a later replay can re-flash it. Without this, a replayed redirect is
+     * "the next request" from the session's point of view: it ages the
+     * original flash away instead of showing it again.
+     *
+     * @return array<string, mixed>
+     */
+    protected function flash(Request $request): array
+    {
+        if (! $this->config('replay_flash', true) || ! $request->hasSession()) {
+            return [];
+        }
+
+        $session = $request->session();
+
+        /** @var list<int|string> $keys */
+        $keys = (array) $session->get('_flash.new', []);
+
+        $flash = [];
+
+        foreach ($keys as $flashKey) {
+            $flash[(string) $flashKey] = $session->get((string) $flashKey);
+        }
+
+        return $flash;
     }
 
     /**
@@ -192,6 +258,10 @@ class EnsureIdempotency
         $value = is_string($value) ? trim($value) : '';
 
         if ($value === '') {
+            $value = $this->resolveKeyFromInput($request);
+        }
+
+        if ($value === '') {
             return null;
         }
 
@@ -202,6 +272,24 @@ class EnsureIdempotency
         }
 
         return $value;
+    }
+
+    /**
+     * Fall back to a hidden form field — rendered by `@idempotencyKey` —
+     * when the header is absent or blank, so a classic HTML form submission,
+     * which cannot send a custom header, can still opt in.
+     */
+    protected function resolveKeyFromInput(Request $request): string
+    {
+        $input = $this->config('input', '_idempotency_key');
+
+        if (! is_string($input)) {
+            return '';
+        }
+
+        $value = $request->input($input);
+
+        return is_string($value) ? trim($value) : '';
     }
 
     protected function cacheKey(Request $request, string $key): string
@@ -324,12 +412,75 @@ class EnsureIdempotency
     protected function replay(StoredResponse $stored, string $fingerprint, Request $request, string $key): Response
     {
         if (! hash_equals($stored->fingerprint, $fingerprint)) {
-            throw new IdempotencyConflictException;
+            return $this->reject(new IdempotencyConflictException, $request);
         }
 
         $this->events->dispatch(new IdempotentReplay($key, $request, $stored));
 
+        if ($this->config('replay_flash', true) && $request->hasSession()) {
+            $session = $request->session();
+
+            foreach ($stored->flash as $flashKey => $value) {
+                $session->flash($flashKey, $value);
+            }
+        }
+
         return $this->mark($stored->toResponse(), replayed: true);
+    }
+
+    /**
+     * Reject a client-facing error. A browser submitting a classic HTML form
+     * cannot make sense of a bare JSON error body, so — when the request
+     * carries a session and is not expecting JSON — redirect back with the
+     * input re-flashed and a translated message instead of throwing.
+     */
+    protected function reject(HttpException $e, Request $request): Response
+    {
+        if (! $this->redirectsBack($request)) {
+            throw $e;
+        }
+
+        return $this->redirector->back()
+            ->withInput($request->except($this->dontFlash()))
+            ->withErrors([(string) $this->config('error_key', 'idempotency') => $this->message($e)]);
+    }
+
+    protected function redirectsBack(Request $request): bool
+    {
+        return (bool) $this->config('redirect_back', true) && $request->hasSession() && ! $request->expectsJson();
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function dontFlash(): array
+    {
+        $fields = ['password', 'password_confirmation', 'current_password'];
+
+        $input = $this->config('input', '_idempotency_key');
+
+        if (is_string($input) && $input !== '') {
+            $fields[] = $input;
+        }
+
+        return $fields;
+    }
+
+    protected function message(HttpException $e): string
+    {
+        $key = match ($e::class) {
+            ConcurrentRequestException::class => 'in_progress',
+            IdempotencyConflictException::class => 'conflict',
+            MissingIdempotencyKeyException::class => 'missing_key',
+            InvalidIdempotencyKeyException::class => 'invalid_key',
+            default => null,
+        };
+
+        if ($key === null) {
+            return $e->getMessage();
+        }
+
+        return (string) $this->translator->get("idempotency::messages.{$key}");
     }
 
     protected function isCacheable(Response $response): bool

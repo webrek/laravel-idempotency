@@ -13,18 +13,21 @@ final class StoredResponse
 {
     /**
      * @param  array<string, string>  $headers
+     * @param  array<string, mixed>  $flash
      */
     public function __construct(
         public readonly int $status,
         public readonly string $body,
         public readonly array $headers,
         public readonly string $fingerprint,
+        public readonly array $flash = [],
     ) {}
 
     /**
      * @param  list<string>  $persistHeaders
+     * @param  array<string, mixed>  $flash
      */
-    public static function capture(SymfonyResponse $response, string $fingerprint, array $persistHeaders): self
+    public static function capture(SymfonyResponse $response, string $fingerprint, array $persistHeaders, array $flash = []): self
     {
         $headers = [];
 
@@ -39,11 +42,12 @@ final class StoredResponse
             (string) $response->getContent(),
             $headers,
             $fingerprint,
+            $flash,
         );
     }
 
     /**
-     * @param  array{status: int|string, body: string, headers?: array<string, string>, fingerprint: string}  $data
+     * @param  array{status: int|string, body: string, headers?: array<string, string>, fingerprint: string, flash?: array<string, mixed>}  $data
      */
     public static function fromArray(array $data): self
     {
@@ -52,11 +56,12 @@ final class StoredResponse
             (string) $data['body'],
             $data['headers'] ?? [],
             (string) $data['fingerprint'],
+            $data['flash'] ?? [],
         );
     }
 
     /**
-     * @return array{status: int, body: string, headers: array<string, string>, fingerprint: string}
+     * @return array{status: int, body: string, headers: array<string, string>, fingerprint: string, flash: array<string, mixed>}
      */
     public function toArray(): array
     {
@@ -65,6 +70,7 @@ final class StoredResponse
             'body' => $this->body,
             'headers' => $this->headers,
             'fingerprint' => $this->fingerprint,
+            'flash' => $this->flash,
         ];
     }
 

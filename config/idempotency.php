@@ -183,4 +183,80 @@ return [
 
     'replay_header' => 'Idempotency-Replayed',
 
+    /*
+    |--------------------------------------------------------------------------
+    | Key from a form field
+    |--------------------------------------------------------------------------
+    |
+    | Classic HTML forms cannot send custom headers, so a hidden field is the
+    | fallback: when the header above is absent or blank, the middleware reads
+    | the idempotency key from this input field instead — rendered
+    | automatically by the `@idempotencyKey` Blade directive. Set to null to
+    | disable the fallback and require the header even from form submissions.
+    |
+    */
+
+    'input' => '_idempotency_key',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Wait for an in-progress request to finish
+    |--------------------------------------------------------------------------
+    |
+    | Instead of an immediate 409 when a key is already in progress, block for
+    | up to this many seconds and replay the response if the original request
+    | finishes in time. Handy for double-clicked web forms; keep it small
+    | (1-3 seconds). 0 disables waiting and returns 409 immediately.
+    |
+    */
+
+    'wait_for_completion' => 0,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Replay session flash data
+    |--------------------------------------------------------------------------
+    |
+    | A replayed redirect is, from the session's point of view, "the next
+    | request": it ages the original flash data without re-flashing it, so a
+    | replayed validation redirect would otherwise lose its errors and old
+    | input, and a replayed success redirect would lose its status message.
+    | When true, the flash data captured alongside the response is re-flashed
+    | before the replay is returned. It is stored in the same cache entry as
+    | the response, with the same sensitivity as the session itself; Laravel
+    | already keeps `password`, `password_confirmation` and `current_password`
+    | out of the flashed old input.
+    |
+    */
+
+    'replay_flash' => true,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Redirect back on rejection
+    |--------------------------------------------------------------------------
+    |
+    | A browser form submission cannot make sense of a bare JSON error body.
+    | When true, and the request carries a session and does not expect JSON,
+    | the four client-facing rejections (missing key, invalid key, conflict,
+    | in-progress) redirect back with the input re-flashed — except passwords
+    | and the `input` field above — and a translated message under
+    | `error_key` below, instead of throwing.
+    |
+    */
+
+    'redirect_back' => true,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Redirect-back error key
+    |--------------------------------------------------------------------------
+    |
+    | The key under which the translated rejection message is flashed to the
+    | errors bag, e.g. `$errors->first('idempotency')` in a Blade view.
+    |
+    */
+
+    'error_key' => 'idempotency',
+
 ];

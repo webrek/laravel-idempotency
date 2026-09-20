@@ -4,6 +4,39 @@ All notable changes to `webrek/laravel-idempotency` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-19
+
+### Added
+
+- Web forms (Blade) support: classic HTML form submissions can now opt into
+  idempotency without sending a custom header.
+- `input` config key (default `_idempotency_key`): when the `Idempotency-Key`
+  header is absent or blank, the middleware falls back to this request field.
+  Set to `null` to disable the fallback.
+- `@idempotencyKey` Blade directive, rendering a hidden input carrying a fresh
+  UUID for the field above.
+- `replay_flash` config key (default `true`): a replayed response now
+  re-flashes the session data (errors, old input, status) captured when it
+  was first stored, so a replayed validation redirect still shows its errors
+  and old input, and a replayed success redirect still shows its status.
+- `redirect_back` and `error_key` config keys (defaults `true` and
+  `idempotency`): the four client-facing rejections (missing key, invalid
+  key, conflict, in-progress) now redirect back with the input re-flashed and
+  a translated message under `error_key`, instead of throwing, whenever the
+  request carries a session and does not expect JSON. Translations are
+  published under the `idempotency-lang` tag (English and Spanish included).
+- `wait_for_completion` config key (default `0`): instead of an immediate
+  `409` when a key is already in progress, block for up to this many seconds
+  and replay the response if the original request finishes in time.
+
+### Changed
+
+- `StoredResponse` gained a fifth constructor parameter, `array $flash`,
+  included in `toArray()`/`fromArray()`; entries stored by 1.3.x still
+  replay correctly during a rolling deploy (`flash` defaults to `[]`).
+- `EnsureIdempotency`'s constructor gained `Illuminate\Routing\Redirector`
+  and `Illuminate\Contracts\Translation\Translator` dependencies.
+
 ## [1.3.0] - 2026-09-19
 
 ### Added
