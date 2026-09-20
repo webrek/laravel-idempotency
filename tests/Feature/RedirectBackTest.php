@@ -153,7 +153,7 @@ class RedirectBackTest extends TestCase
             ->assertStatus(302);
 
         $response->assertSessionHasInput('sku', 'B');
-        $response->assertSessionMissingInput('password');
+        $this->assertArrayNotHasKey('password', $this->app['session.store']->getOldInput());
 
         $this->assertSame(1, Counter::$count);
     }
@@ -174,7 +174,12 @@ class RedirectBackTest extends TestCase
         ], ['Idempotency-Key' => 'dontflash'])->assertStatus(302);
 
         $response->assertSessionHasInput('sku', 'B');
-        $response->assertSessionMissingInput(['password', 'password_confirmation', 'current_password', 'token']);
+
+        $flashed = $this->app['session.store']->getOldInput();
+
+        foreach (['password', 'password_confirmation', 'current_password', 'token'] as $field) {
+            $this->assertArrayNotHasKey($field, $flashed, "{$field} must never be re-flashed.");
+        }
 
         $this->assertSame(1, Counter::$count);
     }
